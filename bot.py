@@ -8,6 +8,7 @@ import re
 import random
 import logging
 import sys
+from urllib.parse import quote
 
 import discord
 from discord import app_commands
@@ -745,8 +746,11 @@ async def loot(interaction: discord.Interaction, item: str):
     Hakee thisisloot.com-sivulta esineen sijainnin ja palauttaa karttakuvan.
     """
     await interaction.response.defer(thinking=True)
-    search_term = item.strip().replace(" ", "%20")
+    clean_item = item.strip()
+    search_term = quote(clean_item)
     url = f"https://thisisloot.com/guides/dayz-loot-finder?search={search_term}"
+    wobo_item = re.sub(r"[^A-Za-z0-9]+", "", clean_item).upper()
+    wobo_url = f"https://wobo.tools/dayz-loot-finder-tool?loot={wobo_item}#selectbox"
 
     loot_channel_id = os.getenv("LOOT_CHANNEL_ID")
     if not loot_channel_id:
@@ -778,10 +782,20 @@ async def loot(interaction: discord.Interaction, item: str):
             if desc:
                 embed.description = desc
             embed.set_image(url=img_url)
+            embed.add_field(name="Lisatyokalut", value=f"[ThisIsLoot]({url}) | [WOBO]({wobo_url})", inline=False)
             await channel.send(embed=embed)
             await interaction.followup.send(f"LÃ¤hetetty loot-tieto kanavalle <#{loot_channel_id}>", ephemeral=True)
         else:
-            await interaction.followup.send(f"Ei lÃ¶ytynyt karttakuvaa esineelle: {item}")
+            # ThisIsLoot no longer always exposes a static map image in HTML; send useful links as fallback.
+            fallback = discord.Embed(
+                title=f"{item.title()} - Loot Finder",
+                description=desc or "Karttakuvaa ei saatu suoraan sivulta, mutta voit avata loot finderin alla olevista linkeistÃ¤.",
+                url=url,
+            )
+            fallback.add_field(name="ThisIsLoot", value=url, inline=False)
+            fallback.add_field(name="WOBO", value=wobo_url, inline=False)
+            await channel.send(embed=fallback)
+            await interaction.followup.send(f"LÃ¤hetetty loot-linkit kanavalle <#{loot_channel_id}>", ephemeral=True)
     except Exception as e:
         logging.exception("Loot finder error")
         await interaction.followup.send(f"Tapahtui virhe hakiessa esinettÃ¤: {item}\n{e}")
