@@ -685,6 +685,47 @@ async def addserver(interaction: discord.Interaction, url: str):
     )
 
 
+@tree.command(name="loot", description="Hae DayZ esineen sijainti kartalla")
+@app_commands.describe(item="Esineen nimi DayZ:ssa")
+async def loot(interaction: discord.Interaction, item: str):
+    """
+    Slash-komento: /loot [esineen_nimi]
+    Hakee thisisloot.com-sivulta esineen sijainnin ja palauttaa karttakuvan.
+    """
+    await interaction.response.defer(thinking=True)
+    # Muodosta hakusana URL:iin (esim. "m4a1" -> "M4A1")
+    search_term = item.strip().replace(" ", "%20")
+    url = f"https://thisisloot.com/guides/dayz-loot-finder?search={search_term}"
+
+    try:
+        html = await aiohttp_request(url, return_type="text")
+        soup = BeautifulSoup(html, "lxml")
+
+        # Etsi karttakuva (oletetaan että img tagi, jossa src sisältää "map" ja esineen nimi)
+        img_tag = soup.find("img", src=lambda s: s and "map" in s)
+        if img_tag and img_tag.get("src"):
+            img_url = img_tag["src"]
+            if img_url.startswith("/"):
+                img_url = f"https://thisisloot.com{img_url}"
+        else:
+            img_url = None
+
+        # Etsi mahdollinen kuvaus tai tieto lootista
+        desc_tag = soup.find("div", class_="loot-description")
+        desc = desc_tag.get_text(strip=True) if desc_tag else None
+
+        if img_url:
+            embed = discord.Embed(title=f"{item.title()} - DayZ Loot Finder", url=url)
+            if desc:
+                embed.description = desc
+            embed.set_image(url=img_url)
+            await interaction.followup.send(embed=embed)
+        else:
+            await interaction.followup.send(f"Ei löytynyt karttakuvaa esineelle: {item}")
+    except Exception as e:
+        logging.exception("Loot finder error")
+        await interaction.followup.send(f"Tapahtui virhe hakiessa esinettä: {item}\n{e}")
+
 @tree.command(name="removeserver", description="Poista DayZ server BattleMetrics linkillä")
 @app_commands.describe(url="BattleMetrics server link")
 async def removeserver(interaction: discord.Interaction, url: str):
