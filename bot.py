@@ -41,59 +41,48 @@ async def aiohttp_request(url: str, *, return_type: str = "json", headers: dict 
     return_type: 'json' or 'text'
     """
     global AIOHTTP_SESSION
-    if AIOHTTP_SESSION is None:
-        # fallback to creating a temporary session (shouldn't normally happen)
-        sess = aiohttp.ClientSession()
-        close_after = True
-    else:
-        sess = AIOHTTP_SESSION
-        close_after = False
+    if AIOHTTP_SESSION is None or getattr(AIOHTTP_SESSION, "closed", False):
+        AIOHTTP_SESSION = aiohttp.ClientSession()
+    sess = AIOHTTP_SESSION
 
-    try:
-        for attempt in range(retries):
-            try:
-                # use ClientTimeout for clearer timeout semantics
-                timeout_obj = aiohttp.ClientTimeout(total=timeout)
-                async with sess.get(url, headers=headers, timeout=timeout_obj) as resp:
-                    status = resp.status
-                    if status == 429:
-                        # respect Retry-After header if present
-                        ra = resp.headers.get("Retry-After")
-                        if ra:
-                            try:
-                                wait = float(ra)
-                            except Exception:
-                                wait = base_backoff * (2 ** attempt)
-                            await asyncio.sleep(wait)
-                            continue
-                        else:
-                            # simple backoff then retry
-                            pass
-
-                    if status >= 400:
-                        text = await resp.text()
-                        raise RuntimeError(f"HTTP {status}: {text}")
-
-                    if return_type == "json":
-                        return await resp.json()
+    for attempt in range(retries):
+        try:
+            # use ClientTimeout for clearer timeout semantics
+            timeout_obj = aiohttp.ClientTimeout(total=timeout)
+            async with sess.get(url, headers=headers, timeout=timeout_obj) as resp:
+                status = resp.status
+                if status == 429:
+                    # respect Retry-After header if present
+                    ra = resp.headers.get("Retry-After")
+                    if ra:
+                        try:
+                            wait = float(ra)
+                        except Exception:
+                            wait = base_backoff * (2 ** attempt)
+                        await asyncio.sleep(wait)
+                        continue
                     else:
-                        return await resp.text()
+                        # simple backoff then retry
+                        pass
 
-            except asyncio.CancelledError:
-                # allow cancellation to propagate
+                if status >= 400:
+                    text = await resp.text()
+                    raise RuntimeError(f"HTTP {status}: {text}")
+
+                if return_type == "json":
+                    return await resp.json()
+                else:
+                    return await resp.text()
+
+        except asyncio.CancelledError:
+            # allow cancellation to propagate
+            raise
+        except Exception as e:
+            if attempt == retries - 1:
                 raise
-            except Exception as e:
-                if attempt == retries - 1:
-                    raise
-                delay = base_backoff * (2 ** attempt) + random.uniform(0, 0.5)
-                logging.warning("Request to %s failed (attempt %d/%d): %s â€” retrying in %.2fs", url, attempt + 1, retries, e, delay)
-                await asyncio.sleep(delay)
-    finally:
-        if close_after:
-            try:
-                await sess.close()
-            except Exception:
-                logging.exception("Error closing temporary aiohttp session")
+            delay = base_backoff * (2 ** attempt) + random.uniform(0, 0.5)
+            logging.warning("Request to %s failed (attempt %d/%d): %s â€” retrying in %.2fs", url, attempt + 1, retries, e, delay)
+            await asyncio.sleep(delay)
 from bs4 import BeautifulSoup
 from bs4 import FeatureNotFound
 
@@ -626,7 +615,7 @@ async def on_ready():
     try:
         # create shared aiohttp session
         global AIOHTTP_SESSION
-        if AIOHTTP_SESSION is None:
+        if AIOHTTP_SESSION is None or getattr(AIOHTTP_SESSION, "closed", False):
             AIOHTTP_SESSION = aiohttp.ClientSession()
 
         # Register signal handlers to ensure aiohttp session is closed on shutdown
