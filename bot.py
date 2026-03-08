@@ -136,7 +136,7 @@ async def remove_server_by_id(server_id: str) -> bool:
     new_servers = [s for s in servers if str(s.get("id")) != str(server_id)]
 
     if len(new_servers) == len(servers):
-        return False  # ei löytynyt
+        return False  # not found
 
     db["servers"] = new_servers
     await save_servers(db)
@@ -146,7 +146,7 @@ async def remove_server_by_id(server_id: str) -> bool:
 async def fetch_bm_server_name(server_id: str) -> str | None:
     """
     Hakee BattleMetrics API:sta serverin nimen asynkronisesti.
-    Palauttaa nimen tai None jos epäonnistuu.
+    Returns name or None if failed.
     """
     api_url = f"https://api.battlemetrics.com/servers/{server_id}"
     headers = {"User-Agent": "Mozilla/5.0 (Discord bot; status checker)"}
@@ -326,7 +326,7 @@ def build_embed(data: dict) -> discord.Embed:
     if data.get("online"):
         embed = discord.Embed(
             title=title,
-            description=f"✅ **ONLINE**\nPäivitetty: {updated}",
+            description=f"✅ **ONLINE**\nUpdated: {updated}",
         )
 
         embed.add_field(name="Nimi", value=data.get("name", "—"), inline=False)
@@ -337,12 +337,12 @@ def build_embed(data: dict) -> discord.Embed:
             inline=True,
         )
 
-        # In-game time from BattleMetrics (not real-world clock)
-        embed.add_field(
-            name="Time (in-game)",
-            value=data.get("server_time") or "—",
-            inline=True,
-        )
+        if data.get("server_time"):
+            embed.add_field(
+                name="Time (in-game)",
+                value=data.get("server_time"),
+                inline=True,
+            )
 
         embed.add_field(
             name="Game Port",
@@ -350,18 +350,18 @@ def build_embed(data: dict) -> discord.Embed:
             inline=False,
         )
 
-        embed.add_field(name="Lähde", value="BattleMetrics", inline=True)
+        # Source field removed
 
     else:
         embed = discord.Embed(
             title=title,
-            description=f"❌ **OFFLINE / EI VASTAA**\nPäivitetty: {updated}",
+            description=f"❌ **OFFLINE / NOT RESPONDING**\nUpdated: {updated}",
         )
 
         if "error" in data and data["error"]:
             embed.add_field(name="Virhe", value=f"`{data['error']}`", inline=False)
 
-        embed.add_field(name="Lähde", value="BattleMetrics", inline=True)
+        # Source field removed
 
     return embed
 
@@ -395,13 +395,30 @@ async def fetch_status(server_id: str) -> dict:
             player_count = info.player_count
             game_port = f"{ip}:{port}"
             online = True
+
+            # Query port is usually game port + 1
+            query_port = int(port) + 1
+            from steam.server import SteamServer
+            try:
+                steam_server = SteamServer(ip, query_port)
+                server_info = await asyncio.to_thread(steam_server.info)
+                tags = server_info.get('tags', '')
+                server_time = None
+                if tags:
+                    # Example tag: "dayz:time=12:34"
+                    match = re.search(r'dayz:time=(\d{1,2}:\d{2})', tags)
+                    if match:
+                        server_time = match.group(1)
+            except Exception:
+                server_time = None
+
             result = {
                 "online": online,
                 "name": name,
                 "players": player_count,
                 "max_players": max_players,
                 "game_port": game_port,
-                "server_time": None,
+                "server_time": server_time,
                 "source": "Steam",
                 "server_id": server_id,
             }
@@ -423,7 +440,7 @@ class ServerSelect(discord.ui.Select):
             options.append(discord.SelectOption(label=label[:100], value=sid, default=(sid == selected_id)))
 
         if not options:
-            options = [discord.SelectOption(label="Ei servereitä lisätty", value="none")]
+            options = [discord.SelectOption(label="No servers added", value="none")]
 
         super().__init__(
             placeholder="Valitse serveri...",
@@ -436,7 +453,7 @@ class ServerSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         server_id = self.values[0]
         if server_id == "none":
-            await interaction.response.send_message("Lisää serveri ensin komennolla /addserver", ephemeral=True)
+            await interaction.response.send_message("Add a server first with /addserver", ephemeral=True)
             return
 
         await _set_selected_server_id(server_id)
@@ -448,24 +465,24 @@ class ServerSelect(discord.ui.Select):
 class AddServerModal(discord.ui.Modal):
     def __init__(self, select: ServerSelect | None = None):
         self.select = select
-        super().__init__(title="Lisää serveri")
-        self.url = discord.ui.TextInput(label="BattleMetrics linkki tai ID", placeholder="https://www.battlemetrics.com/servers/dayz/12345 tai 12345", required=True)
+        super().__init__(title="Add server")
+        self.url = discord.ui.TextInput(label="BattleMetrics link or ID", placeholder="https://www.battlemetrics.com/servers/dayz/12345 tai 12345", required=True)
         self.add_item(self.url)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Tarvitset admin-oikeudet.", ephemeral=True)
+            await interaction.response.send_message("❌ You need admin rights.", ephemeral=True)
             return
 
         raw = self.url.value.strip()
         server_id = extract_bm_id(raw)
         if not server_id:
-            await interaction.response.send_message("❌ Virheellinen BattleMetrics linkki tai ID.", ephemeral=True)
+            await interaction.response.send_message("❌ Invalid BattleMetrics link or ID.", ephemeral=True)
             return
 
         db = load_servers()
         if any(s.get("id") == server_id for s in db.get("servers", [])):
-            await interaction.response.send_message("⚠️ Serveri on jo listassa.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Server is already in the list.", ephemeral=True)
             return
 
         server_name = await fetch_bm_server_name(server_id) or f"DayZ {server_id}"
@@ -479,12 +496,12 @@ class AddServerModal(discord.ui.Modal):
         except Exception:
             logging.exception("Failed to update status message after adding server via modal")
 
-        await interaction.response.send_message(f"✅ Server lisätty: **{server_name}** (`{server_id}`)", ephemeral=True)
+        await interaction.response.send_message(f"✅ Server added: **{server_name}** (`{server_id}`)", ephemeral=True)
 
 
 class AddServerButton(discord.ui.Button):
     def __init__(self, select: ServerSelect | None = None):
-        super().__init__(label="Lisää serveri", style=discord.ButtonStyle.secondary, custom_id="add_server_button")
+        super().__init__(label="Add server", style=discord.ButtonStyle.secondary, custom_id="add_server_button")
         self.select = select
 
     async def callback(self, interaction: discord.Interaction):
@@ -494,12 +511,12 @@ class AddServerButton(discord.ui.Button):
 
 class RemoveServerButton(discord.ui.Button):
     def __init__(self, select: ServerSelect | None = None):
-        super().__init__(label="Poista serveri", style=discord.ButtonStyle.danger, custom_id="remove_server_button")
+        super().__init__(label="Remove server", style=discord.ButtonStyle.danger, custom_id="remove_server_button")
         self.select = select
 
     async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Tarvitset admin-oikeudet poistaaksesi serverin.", ephemeral=True)
+            await interaction.response.send_message("❌ You need admin rights to remove a server.", ephemeral=True)
             return
 
         server_id = None
@@ -515,7 +532,7 @@ class RemoveServerButton(discord.ui.Button):
             server_id = str(servers[0]['id']) if servers else None
 
         if not server_id:
-            await interaction.response.send_message('Ei servereitä listassa.', ephemeral=True)
+            await interaction.response.send_message('No servers in the list.', ephemeral=True)
             return
 
         # remember current index to pick the next server
@@ -529,7 +546,7 @@ class RemoveServerButton(discord.ui.Button):
 
         removed = await remove_server_by_id(server_id)
         if not removed:
-            await interaction.response.send_message('⚠️ Serveriä ei löytynyt listasta.', ephemeral=True)
+            await interaction.response.send_message('⚠️ Server not found in the list.', ephemeral=True)
             return
 
         # determine next selected id
@@ -545,7 +562,7 @@ class RemoveServerButton(discord.ui.Button):
                 else:
                     selected_next = str(servers_after[-1]['id'])
 
-        # Päivitä statusviesti ja aseta valinta seuraavaksi
+        # Update status message and set selection to next
         try:
             channel = await interaction.client.fetch_channel(STATUS_CHANNEL_ID)
             if hasattr(channel, 'send'):
@@ -553,7 +570,7 @@ class RemoveServerButton(discord.ui.Button):
         except Exception:
             logging.exception('Failed to update status message after removing server via button')
 
-        await interaction.response.send_message(f'🗑️ Server poistettu (`{server_id}`)', ephemeral=True)
+        await interaction.response.send_message(f'🗑️ Server removed (`{server_id}`)', ephemeral=True)
 
 
 class ServerSelectView(discord.ui.View):
@@ -570,7 +587,7 @@ class ServerSelectView(discord.ui.View):
 
 class RefreshButton(discord.ui.Button):
     def __init__(self, select: ServerSelect):
-        super().__init__(label="Päivitä", style=discord.ButtonStyle.primary, custom_id="refresh_button")
+        super().__init__(label="Refresh", style=discord.ButtonStyle.primary, custom_id="refresh_button")
         self.select = select
 
     async def callback(self, interaction: discord.Interaction):
@@ -588,12 +605,12 @@ class RefreshButton(discord.ui.Button):
             server_id = str(servers[0]['id']) if servers else None
 
         if not server_id:
-            await interaction.response.send_message('Ei servereitä lisätty', ephemeral=True)
+            await interaction.response.send_message('No servers added', ephemeral=True)
             return
 
         # Notify user that refresh is in progress
         try:
-            await interaction.response.send_message('Päivitetään...', ephemeral=True)
+            await interaction.response.send_message('Refreshing...', ephemeral=True)
         except Exception:
             logging.exception('Failed to send ephemeral updating message')
 
@@ -620,15 +637,15 @@ async def upsert_status_message(channel, selected_id: str | None = None) -> None
     servers = db.get("servers", [])
     active_id = _resolve_active_server_id(servers, preferred_id=selected_id)
 
-    data = await fetch_status(active_id) if active_id else {"online": False, "error": "Ei servereitä lisätty"}
+    data = await fetch_status(active_id) if active_id else {"online": False, "error": "No servers added"}
     embed = build_embed(data)
-
     view = ServerSelectView(selected_id=active_id)
 
-    if active_id:
-        await _set_selected_server_id(active_id)
-    else:
-        await _set_selected_server_id(None)
+    # Update bot presence with player count
+    player_count = data.get("players", "?")
+    max_players = data.get("max_players", "?")
+    status_text = f"Players: {player_count}/{max_players}"
+    await client.change_presence(activity=discord.Game(name=status_text))
 
     if msg_id:
         try:
@@ -724,13 +741,13 @@ async def on_ready():
     asyncio.create_task(loop())
 
 
-@tree.command(name="addserver", description="Lisää DayZ server BattleMetrics linkillä")
+@tree.command(name="addserver", description="Add DayZ server with BattleMetrics link")
 @app_commands.describe(url="BattleMetrics server link")
 async def addserver(interaction: discord.Interaction, url: str):
 
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message(
-            "❌ Tarvitset admin-oikeudet.",
+            "❌ You need admin rights.",
             ephemeral=True
         )
         return
@@ -738,7 +755,7 @@ async def addserver(interaction: discord.Interaction, url: str):
     server_id = extract_bm_id(url)
     if not server_id:
         await interaction.response.send_message(
-            "❌ Virheellinen BattleMetrics linkki.",
+            "❌ Invalid BattleMetrics link or ID.",
             ephemeral=True
         )
         return
@@ -747,7 +764,7 @@ async def addserver(interaction: discord.Interaction, url: str):
 
     if any(s.get("id") == server_id for s in db.get("servers", [])):
         await interaction.response.send_message(
-            "⚠️ Serveri on jo lisätty.",
+            "⚠️ Server is already added.",
             ephemeral=True
         )
         return
@@ -761,7 +778,7 @@ async def addserver(interaction: discord.Interaction, url: str):
     })
     await save_servers(db)
 
-    # Päivitä statusviesti (optional mutta hyvä)
+    # Update status message (optional but recommended)
     try:
         channel = await interaction.client.fetch_channel(STATUS_CHANNEL_ID)
         if isinstance(channel, discord.abc.Messageable):
@@ -769,18 +786,18 @@ async def addserver(interaction: discord.Interaction, url: str):
     except Exception:
         logging.exception("Failed to update status message after adding server")
 
-    # Vastaus käyttäjälle
+    # Response to user
     await interaction.response.send_message(
-        f"✅ Server lisätty: **{server_name}** (`{server_id}`)"
+        f"✅ Server added: **{server_name}** (`{server_id}`)"
     )
 
 
-@tree.command(name="loot", description="Hae DayZ esineen sijainti kartalla")
-@app_commands.describe(item="Esineen nimi DayZ:ssa")
+@tree.command(name="loot", description="Fetch DayZ item location on the map")
+@app_commands.describe(item="Item name in DayZ")
 async def loot(interaction: discord.Interaction, item: str):
     """
-    Slash-komento: /loot [esineen_nimi]
-    Hakee thisisloot.com-sivulta esineen sijainnin ja palauttaa karttakuvan.
+    Slash command: /loot [item_name]
+    Fetches item location from thisisloot.com and returns map image.
     """
     await interaction.response.defer(thinking=True)
     clean_item = item.strip()
@@ -791,12 +808,12 @@ async def loot(interaction: discord.Interaction, item: str):
 
     loot_channel_id = os.getenv("LOOT_CHANNEL_ID")
     if not loot_channel_id:
-        await interaction.followup.send("LOOT_CHANNEL_ID ei ole asetettu .env-tiedostossa.")
+        await interaction.followup.send("LOOT_CHANNEL_ID is not set in the .env file.")
         return
     try:
         channel = await interaction.client.fetch_channel(int(loot_channel_id))
     except Exception:
-        await interaction.followup.send(f"Kanavaa ID:llä {loot_channel_id} ei löytynyt.")
+        await interaction.followup.send(f"Channel with ID {loot_channel_id} not found.")
         return
 
     try:
@@ -819,32 +836,32 @@ async def loot(interaction: discord.Interaction, item: str):
             if desc:
                 embed.description = desc
             embed.set_image(url=img_url)
-            embed.add_field(name="Lisatyokalut", value=f"[ThisIsLoot]({url}) | [WOBO]({wobo_url})", inline=False)
+            embed.add_field(name="Loot Sources", value=f"[ThisIsLoot]({url}) | [WOBO]({wobo_url})", inline=False)
             await channel.send(embed=embed)
-            await interaction.followup.send(f"Lähetetty loot-tieto kanavalle <#{loot_channel_id}>", ephemeral=True)
+            await interaction.followup.send(f"Loot information sent to channel <#{loot_channel_id}>", ephemeral=True)
         else:
             # ThisIsLoot no longer always exposes a static map image in HTML; send useful links as fallback.
             fallback = discord.Embed(
                 title=f"{item.title()} - Loot Finder",
-                description=desc or "Karttakuvaa ei saatu suoraan sivulta, mutta voit avata loot finderin alla olevista linkeistä.",
+                description=desc or "No map image available directly from the site, but you can open the loot finder from the links below.",
                 url=url,
             )
             fallback.add_field(name="ThisIsLoot", value=url, inline=False)
             fallback.add_field(name="WOBO", value=wobo_url, inline=False)
             await channel.send(embed=fallback)
-            await interaction.followup.send(f"Lähetetty loot-linkit kanavalle <#{loot_channel_id}>", ephemeral=True)
+            await interaction.followup.send(f"Loot links sent to channel <#{loot_channel_id}>", ephemeral=True)
     except Exception as e:
         logging.exception("Loot finder error")
-        await interaction.followup.send(f"Tapahtui virhe hakiessa esinettä: {item}\n{e}")
+        await interaction.followup.send(f"An error occurred while fetching item: {item}\n{e}")
 
-@tree.command(name="removeserver", description="Poista DayZ server BattleMetrics linkillä")
+@tree.command(name="removeserver", description="Remove DayZ server with BattleMetrics link")
 @app_commands.describe(url="BattleMetrics server link")
 async def removeserver(interaction: discord.Interaction, url: str):
 
     # admin check
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message(
-            "❌ Tarvitset admin-oikeudet.",
+            "❌ You need admin rights.",
             ephemeral=True
         )
         return
@@ -852,7 +869,7 @@ async def removeserver(interaction: discord.Interaction, url: str):
     server_id = extract_bm_id(url)
     if not server_id:
         await interaction.response.send_message(
-            "❌ Virheellinen BattleMetrics linkki.",
+            "❌ Invalid BattleMetrics link or ID.",
             ephemeral=True
         )
         return
@@ -861,12 +878,12 @@ async def removeserver(interaction: discord.Interaction, url: str):
 
     if not removed:
         await interaction.response.send_message(
-            "⚠️ Serveriä ei löytynyt listasta.",
+            "⚠️ Server not found in the list.",
             ephemeral=True
         )
         return
 
-    # Päivitä status/dropdown heti
+    # Update status/dropdown immediately
     try:
         channel = await interaction.client.fetch_channel(STATUS_CHANNEL_ID)
         if isinstance(channel, discord.abc.Messageable):
@@ -875,7 +892,7 @@ async def removeserver(interaction: discord.Interaction, url: str):
         logging.exception("Failed to update status message after removing server")
 
     await interaction.response.send_message(
-        f"🗑️ Server poistettu (`{server_id}`)"
+        f"🗑️ Server removed (`{server_id}`)"
     )
 
 
