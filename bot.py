@@ -368,10 +368,47 @@ def build_embed(data: dict) -> discord.Embed:
 
 async def fetch_status(server_id: str) -> dict:
     try:
-        return await get_status_battlemetrics(server_id)
+        return await get_status_steam(server_id)
     except Exception as e:
         logging.exception("fetch_status failed for %s", server_id)
         return {"online": False, "error": str(e), "server_id": server_id}
+    import a2s
+
+    # Steam Game Server Query
+    async def get_status_steam(server_id: str) -> dict:
+        db = load_servers()
+        servers = db.get("servers", [])
+        server = next((s for s in servers if str(s.get("id")) == str(server_id)), None)
+        if not server:
+            return {"online": False, "error": "Server not found", "server_id": server_id}
+
+        ip = server.get("ip")
+        port = server.get("port")
+        if not ip or not port:
+            return {"online": False, "error": "IP/port missing", "server_id": server_id}
+
+        try:
+            info = await asyncio.to_thread(a2s.info, (ip, int(port)))
+            players = await asyncio.to_thread(a2s.players, (ip, int(port)))
+            name = info.server_name
+            max_players = info.max_players
+            player_count = info.player_count
+            game_port = f"{ip}:{port}"
+            online = True
+            result = {
+                "online": online,
+                "name": name,
+                "players": player_count,
+                "max_players": max_players,
+                "game_port": game_port,
+                "server_time": None,
+                "source": "Steam",
+                "server_id": server_id,
+            }
+            return result
+        except Exception as e:
+            logging.exception("Steam query failed for %s", server_id)
+            return {"online": False, "error": f"Steam query failed: {e}", "server_id": server_id}
     
 
 class ServerSelect(discord.ui.Select):

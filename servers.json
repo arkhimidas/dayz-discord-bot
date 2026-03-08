@@ -2,19 +2,27 @@
   "servers": [
     {
       "id": "24745238",
-      "name": "DUSK Vanilla Chernarus - 1PP | WIPED NOV 27 | NO MODS"
+      "name": "DUSK Vanilla Chernarus - 1PP | WIPED NOV 27 | NO MODS",
+      "ip": "123.123.123.123",
+      "port": "2302"
     },
     {
       "id": "18528625",
-      "name": "KarmaKrew Chernarus #1 EU - 1PP | VANILLA + MODS"
+      "name": "KarmaKrew Chernarus #1 EU - 1PP | VANILLA + MODS",
+      "ip": "124.124.124.124",
+      "port": "2302"
     },
     {
       "id": "23463030",
-      "name": "Spaggies Vanilla Chernarus Blue - Hosted by Jack"
+      "name": "Spaggies Vanilla Chernarus Blue - Hosted by Jack",
+      "ip": "125.125.125.125",
+      "port": "2302"
     },
     {
       "id": "23461991",
-      "name": "Spaggies Vanilla Chernarus Green - Hosted by Jack"
+      "name": "Spaggies Vanilla Chernarus Green - Hosted by Jack",
+      "ip": "126.126.126.126",
+      "port": "2302"
     }
   ]
 }
